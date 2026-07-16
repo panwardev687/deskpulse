@@ -1,0 +1,5 @@
+.claude/
+.DS_Store
+*.app/
+AppIcon.iconset/
+*.zip
