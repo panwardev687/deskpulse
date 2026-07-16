@@ -86,6 +86,22 @@ final class ImageToolsModel: ObservableObject {
     @Published var wmSizePercent = 16.0      // percent of image width
     @Published var wmWhite = true
     @Published var enlargeFactor = 2.0
+    @Published var selectedID: UUID?
+
+    /// The image shown in the preview panel: the clicked row, else first pending.
+    var previewJob: ImageJob? {
+        if let j = jobs.first(where: { $0.id == selectedID }) { return j }
+        return jobs.first(where: { $0.status == .pending }) ?? jobs.first
+    }
+
+    /// Mark a single job finished from an interactive editor (cutout).
+    func complete(_ id: UUID, status: JobStatus, out: URL?) {
+        guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
+        jobs[i].status = status
+        jobs[i].outURL = out
+        jobs[i].outSize = out.map(fileSize) ?? 0
+        if selectedID == id { selectedID = nil }   // move on to the next pending
+    }
 
     private let queue = DispatchQueue(label: "deskpulse.imagetools")
 
@@ -230,10 +246,9 @@ struct ImageToolsView: View {
         VStack(spacing: 0) {
             controls
             Divider()
-            if model.op == .crop, let first = model.jobs.first(where: { $0.status == .pending }) {
-                CropPreviewLoader(url: first.url, unitRect: $model.cropUnitRect,
-                                  aspect: model.cropAspect)
-                    .frame(height: 280)
+            if let job = model.previewJob {
+                previewPanel(job)
+                    .frame(height: 300)
                     .background(Color(nsColor: .underPageBackgroundColor))
                 Divider()
             }
@@ -389,6 +404,30 @@ struct ImageToolsView: View {
         .background(dropActive ? Color.blue.opacity(0.06) : Color.clear)
     }
 
+    /// Live preview of the current tool applied to the selected image.
+    @ViewBuilder
+    private func previewPanel(_ job: ImageJob) -> some View {
+        switch model.op {
+        case .crop:
+            CropPreviewLoader(url: job.url, unitRect: $model.cropUnitRect,
+                              aspect: model.cropAspect)
+                .id(job.id)
+        case .cutout:
+            if #available(macOS 14, *) {
+                CutoutEditor(url: job.url) { status, out in
+                    model.complete(job.id, status: status, out: out)
+                }
+                .id(job.id)
+            }
+        case .watermark:
+            WatermarkPreview(url: job.url, model: model).id(job.id)
+        case .rotate:
+            RotatePreview(url: job.url, action: model.rotateAction).id(job.id)
+        case .resize, .compress, .enlarge:
+            DimsPreview(url: job.url, model: model).id(job.id)
+        }
+    }
+
     private var jobList: some View {
         List(model.jobs) { job in
             HStack(spacing: 10) {
@@ -420,6 +459,11 @@ struct ImageToolsView: View {
                 }
             }
             .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .onTapGesture { model.selectedID = job.id }
+            .listRowBackground(
+                model.previewJob?.id == job.id
+                    ? Color.accentColor.opacity(0.08) : Color.clear)
         }
         .listStyle(.inset)
     }
@@ -440,9 +484,12 @@ struct ImageToolsView: View {
             Button("Add Images…") { openPanel() }
             Button("Clear") { model.clear() }.disabled(model.running)
             Spacer()
-            Text("Originals are kept.")
+            Text(model.op == .cutout
+                 ? "Use the editor above per image, or cut out every image automatically."
+                 : "Originals are kept.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
-            Button(model.running ? "Working…" : "Apply") { model.runAll() }
+            Button(model.running ? "Working…"
+                   : model.op == .cutout ? "Auto Cutout All" : "Apply") { model.runAll() }
                 .keyboardShortcut(.defaultAction)
                 .disabled(model.running || !model.jobs.contains { $0.status == .pending })
         }
@@ -455,6 +502,138 @@ struct ImageToolsView: View {
         panel.canChooseDirectories = false
         if panel.runModal() == .OK {
             model.add(urls: panel.urls)
+        }
+    }
+}
+
+// MARK: - Live previews
+
+/// Watermark preview: re-renders the stamp live as settings change.
+struct WatermarkPreview: View {
+    let url: URL
+    @ObservedObject var model: ImageToolsModel
+    @State private var base: CGImage?
+    @State private var logo: NSImage?
+
+    var body: some View {
+        Group {
+            if let base {
+                let rendered = watermarkCG(
+                    base, text: model.wmUseLogo ? "" : model.wmText,
+                    logo: model.wmUseLogo ? logo : nil,
+                    position: model.wmPosition, opacity: model.wmOpacity,
+                    sizePercent: model.wmSizePercent, white: model.wmWhite)
+                Image(decorative: rendered ?? base, scale: 1)
+                    .resizable().aspectRatio(contentMode: .fit)
+                    .padding(10)
+            } else {
+                ProgressView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            DispatchQueue.global().async {
+                let cg = loadCGImage(url).map { downscale($0, maxSide: 900) }
+                DispatchQueue.main.async { base = cg }
+            }
+        }
+        .onChange(of: model.wmLogoURL) { newURL in
+            logo = newURL.flatMap { NSImage(contentsOf: $0) }
+        }
+        .onAppear { logo = model.wmLogoURL.flatMap { NSImage(contentsOf: $0) } }
+    }
+}
+
+/// Rotate and flip preview, done with view transforms so it is instant.
+struct RotatePreview: View {
+    let url: URL
+    let action: RotateAction
+    @State private var img: NSImage?
+
+    var body: some View {
+        Group {
+            if let img {
+                Image(nsImage: img)
+                    .resizable().aspectRatio(contentMode: .fit)
+                    .rotationEffect(.degrees(rotation))
+                    .scaleEffect(x: flipX ? -1 : 1, y: flipY ? -1 : 1)
+                    .padding(24)
+            } else {
+                ProgressView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { img = NSImage(contentsOf: url) }
+    }
+
+    private var rotation: Double {
+        switch action {
+        case .cw90: return 90
+        case .ccw90: return -90
+        case .half: return 180
+        default: return 0
+        }
+    }
+    private var flipX: Bool { action == .flipH }
+    private var flipY: Bool { action == .flipV }
+}
+
+/// Resize / compress / enlarge preview: the image plus what its pixel
+/// dimensions will become.
+struct DimsPreview: View {
+    let url: URL
+    @ObservedObject var model: ImageToolsModel
+    @State private var img: NSImage?
+    @State private var dims = (w: 0, h: 0)
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if let img {
+                Image(nsImage: img)
+                    .resizable().aspectRatio(contentMode: .fit)
+                    .padding(.top, 10)
+                Text(caption)
+                    .font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 8)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            DispatchQueue.global().async {
+                let cg = loadCGImage(url)
+                let d = cg.map { ($0.width, $0.height) } ?? (0, 0)
+                let preview = cg.map { downscale($0, maxSide: 900) }
+                DispatchQueue.main.async {
+                    dims = d
+                    img = preview.map { NSImage(cgImage: $0, size: .zero) }
+                }
+            }
+        }
+    }
+
+    private var caption: String {
+        let (w, h) = dims
+        guard w > 0, h > 0 else { return "" }
+        func scaled(_ f: Double) -> String {
+            "\(w) × \(h) px  →  \(Int(Double(w) * f)) × \(Int(Double(h) * f)) px"
+        }
+        let longest = Double(max(w, h))
+        switch model.op {
+        case .resize:
+            let f = model.resizeByPercent
+                ? model.percent / 100
+                : min(1, model.maxSide / longest)
+            return scaled(f)
+        case .compress:
+            let f = model.compressResize ? min(1, model.compressMaxSide / longest) : 1
+            return scaled(f) + "  ·  quality \(Int(model.compressQuality))"
+        case .enlarge:
+            return scaled(model.enlargeFactor)
+        default:
+            return "\(w) × \(h) px"
         }
     }
 }
