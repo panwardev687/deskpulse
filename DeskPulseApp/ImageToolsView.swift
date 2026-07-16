@@ -8,15 +8,31 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum ImageOp: String, CaseIterable, Identifiable {
-    case resize, compress, rotate
+    case resize, compress, crop, watermark, enlarge, cutout, rotate
     var id: String { rawValue }
     var label: String {
         switch self {
         case .resize: return "Resize"
         case .compress: return "Compress"
+        case .crop: return "Crop"
+        case .watermark: return "Watermark"
+        case .enlarge: return "Enlarge"
+        case .cutout: return "Remove Background"
         case .rotate: return "Rotate & Flip"
         }
     }
+
+    /// Background removal needs Vision's subject lift, which is macOS 14+.
+    static var available: [ImageOp] {
+        if #available(macOS 14, *) { return allCases }
+        return allCases.filter { $0 != .cutout }
+    }
+}
+
+/// Formats ImageIO can write back; anything else (webp, gif, bmp) becomes png.
+func editableOutExt(_ url: URL) -> String {
+    let ext = url.pathExtension.lowercased()
+    return ["jpg", "jpeg", "png", "heic", "tiff", "tif"].contains(ext) ? ext : "png"
 }
 
 enum RotateAction: String, CaseIterable, Identifiable {
@@ -60,6 +76,16 @@ final class ImageToolsModel: ObservableObject {
     @Published var compressResize = true     // also cap longest side while compressing
     @Published var compressMaxSide = 2048.0
     @Published var rotateAction: RotateAction = .cw90
+    @Published var cropUnitRect: CGRect?
+    @Published var cropAspect: Double?       // width/height, nil = free
+    @Published var wmText = "© my name"
+    @Published var wmLogoURL: URL?
+    @Published var wmUseLogo = false
+    @Published var wmPosition: StampPosition = .bottomRight
+    @Published var wmOpacity = 0.6
+    @Published var wmSizePercent = 16.0      // percent of image width
+    @Published var wmWhite = true
+    @Published var enlargeFactor = 2.0
 
     private let queue = DispatchQueue(label: "deskpulse.imagetools")
 
@@ -139,6 +165,39 @@ final class ImageToolsModel: ObservableObject {
             args += [job.url.path, "--out", out.path]
             let r = runCommand("/usr/bin/sips", args)
             return finish(r, out)
+
+        case .crop:
+            guard let unit = cropUnitRect else {
+                return (.failed("draw a crop area on the preview first"), nil)
+            }
+            let out = freeOutputURL(dir: dir, base: base + " cropped",
+                                    ext: editableOutExt(job.url))
+            let r = cropImage(job.url, unitRect: unit, output: out)
+            return r.ok ? (.done, out) : (.failed(r.why), nil)
+
+        case .watermark:
+            let out = freeOutputURL(dir: dir, base: base + " watermarked",
+                                    ext: editableOutExt(job.url))
+            let r = watermarkImage(
+                job.url, text: wmUseLogo ? "" : wmText,
+                logo: wmUseLogo ? wmLogoURL : nil,
+                position: wmPosition, opacity: wmOpacity,
+                sizePercent: wmSizePercent, white: wmWhite, output: out)
+            return r.ok ? (.done, out) : (.failed(r.why), nil)
+
+        case .enlarge:
+            let out = freeOutputURL(dir: dir, base: base + " enlarged",
+                                    ext: editableOutExt(job.url))
+            let r = enlargeImage(job.url, factor: enlargeFactor, output: out)
+            return r.ok ? (.done, out) : (.failed(r.why), nil)
+
+        case .cutout:
+            guard #available(macOS 14, *) else {
+                return (.failed("needs macOS 14 or newer"), nil)
+            }
+            let out = freeOutputURL(dir: dir, base: base + " no background", ext: "png")
+            let r = removeBackground(job.url, output: out)
+            return r.ok ? (.done, out) : (.failed(r.why), nil)
         }
     }
 
@@ -171,6 +230,13 @@ struct ImageToolsView: View {
         VStack(spacing: 0) {
             controls
             Divider()
+            if model.op == .crop, let first = model.jobs.first(where: { $0.status == .pending }) {
+                CropPreviewLoader(url: first.url, unitRect: $model.cropUnitRect,
+                                  aspect: model.cropAspect)
+                    .frame(height: 280)
+                    .background(Color(nsColor: .underPageBackgroundColor))
+                Divider()
+            }
             if model.jobs.isEmpty {
                 dropZone
             } else {
@@ -193,12 +259,18 @@ struct ImageToolsView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Picker("", selection: $model.op) {
-                ForEach(ImageOp.allCases) { Text($0.label).tag($0) }
+            HStack(spacing: 8) {
+                Text("Tool").font(.system(size: 12, weight: .semibold))
+                Picker("", selection: $model.op) {
+                    ForEach(ImageOp.available) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 220)
+                if #unavailable(macOS 14) {
+                    Text("Remove Background needs macOS 14+")
+                        .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 340)
 
             switch model.op {
             case .resize:
@@ -239,6 +311,63 @@ struct ImageToolsView: View {
                     ForEach(RotateAction.allCases) { Text($0.label).tag($0) }
                 }
                 .labelsHidden().frame(maxWidth: 200)
+            case .crop:
+                HStack(spacing: 10) {
+                    Text("Aspect").font(.system(size: 11))
+                    Picker("", selection: $model.cropAspect) {
+                        Text("Free").tag(Double?.none)
+                        Text("Square").tag(Double?.some(1))
+                        Text("16:9").tag(Double?.some(16.0 / 9))
+                        Text("4:3").tag(Double?.some(4.0 / 3))
+                        Text("3:2").tag(Double?.some(1.5))
+                    }
+                    .labelsHidden().frame(maxWidth: 110)
+                    Text("Drag on the preview below. The same area (as a fraction of each image) is cropped from every file.")
+                        .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    if model.cropUnitRect != nil {
+                        Button("Reset") { model.cropUnitRect = nil }.controlSize(.small)
+                    }
+                }
+            case .watermark:
+                HStack(spacing: 10) {
+                    Picker("", selection: $model.wmUseLogo) {
+                        Text("Text").tag(false)
+                        Text("Logo").tag(true)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 120)
+                    if model.wmUseLogo {
+                        Button(model.wmLogoURL?.lastPathComponent ?? "Choose Logo…") {
+                            choosePDFs(false, types: ["png", "jpg", "jpeg", "heic", "tiff"]) {
+                                model.wmLogoURL = $0.first
+                            }
+                        }
+                    } else {
+                        TextField("Watermark text", text: $model.wmText).frame(maxWidth: 160)
+                        Toggle("White", isOn: $model.wmWhite).font(.system(size: 11))
+                    }
+                    Picker("", selection: $model.wmPosition) {
+                        ForEach(StampPosition.allCases) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden().frame(maxWidth: 130)
+                    Text("Size").font(.system(size: 11))
+                    Slider(value: $model.wmSizePercent, in: 5...40, step: 1).frame(width: 90)
+                    Text("Opacity").font(.system(size: 11))
+                    Slider(value: $model.wmOpacity, in: 0.15...1, step: 0.05).frame(width: 90)
+                }
+            case .enlarge:
+                HStack(spacing: 10) {
+                    Picker("", selection: $model.enlargeFactor) {
+                        Text("2x").tag(2.0)
+                        Text("3x").tag(3.0)
+                        Text("4x").tag(4.0)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 140)
+                    Text("High quality Lanczos scaling. Sharper than a plain resize; it does not invent detail like AI upscalers.")
+                        .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                }
+            case .cutout:
+                Text("Cuts the subject (people, pets, products) out of the photo with Apple's on-device segmentation. Output is a PNG with a transparent background.")
+                    .font(.system(size: 10.5)).foregroundStyle(.secondary)
             }
         }
         .padding(12)
@@ -327,5 +456,95 @@ struct ImageToolsView: View {
         if panel.runModal() == .OK {
             model.add(urls: panel.urls)
         }
+    }
+}
+
+// MARK: - Crop preview
+
+/// Loads the first image once and hosts the drag-to-crop surface.
+struct CropPreviewLoader: View {
+    let url: URL
+    @Binding var unitRect: CGRect?
+    let aspect: Double?
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                CropPreview(image: image, unitRect: $unitRect, aspect: aspect)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .onAppear { image = NSImage(contentsOf: url) }
+        .onChange(of: url) { image = NSImage(contentsOf: $0) }
+    }
+}
+
+struct CropPreview: View {
+    let image: NSImage
+    @Binding var unitRect: CGRect?
+    let aspect: Double?
+
+    var body: some View {
+        GeometryReader { geo in
+            let fitted = fittedRect(in: geo.size)
+            ZStack(alignment: .topLeading) {
+                Image(nsImage: image)
+                    .resizable()
+                    .frame(width: fitted.width, height: fitted.height)
+                    .offset(x: fitted.minX, y: fitted.minY)
+                if let unit = unitRect {
+                    let r = CGRect(
+                        x: fitted.minX + unit.minX * fitted.width,
+                        y: fitted.minY + unit.minY * fitted.height,
+                        width: unit.width * fitted.width,
+                        height: unit.height * fitted.height)
+                    Rectangle()
+                        .stroke(Color.accentColor, lineWidth: 2)
+                        .background(Color.accentColor.opacity(0.12))
+                        .frame(width: r.width, height: r.height)
+                        .offset(x: r.minX, y: r.minY)
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 3)
+                    .onChanged { v in
+                        unitRect = dragRect(from: v.startLocation, to: v.location, in: fitted)
+                    }
+            )
+        }
+        .padding(8)
+    }
+
+    private func fittedRect(in size: CGSize) -> CGRect {
+        let iw = max(image.size.width, 1), ih = max(image.size.height, 1)
+        let scale = min(size.width / iw, size.height / ih)
+        let w = iw * scale, h = ih * scale
+        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+    }
+
+    private func dragRect(from a: CGPoint, to b: CGPoint, in fitted: CGRect) -> CGRect {
+        func clamp(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: min(max(p.x, fitted.minX), fitted.maxX),
+                    y: min(max(p.y, fitted.minY), fitted.maxY))
+        }
+        let p1 = clamp(a), p2 = clamp(b)
+        var w = abs(p2.x - p1.x), h = abs(p2.y - p1.y)
+        if let aspect {
+            // lock to the chosen ratio, sized by the larger drag direction
+            if w / max(h, 1) > aspect { h = w / aspect } else { w = h * aspect }
+        }
+        var x = p2.x >= p1.x ? p1.x : p1.x - w
+        var y = p2.y >= p1.y ? p1.y : p1.y - h
+        x = min(max(x, fitted.minX), fitted.maxX - w)
+        y = min(max(y, fitted.minY), fitted.maxY - h)
+        w = min(w, fitted.maxX - x)
+        h = min(h, fitted.maxY - y)
+        return CGRect(x: (x - fitted.minX) / fitted.width,
+                      y: (y - fitted.minY) / fitted.height,
+                      width: w / fitted.width,
+                      height: h / fitted.height)
     }
 }

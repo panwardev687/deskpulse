@@ -6,7 +6,7 @@
 import SwiftUI
 
 enum Pane: String, CaseIterable, Identifiable {
-    case clipboard, snippets, convert, imageTools, settings
+    case clipboard, snippets, convert, pdfTools, imageTools, settings
 
     var id: String { rawValue }
     var title: String {
@@ -14,6 +14,7 @@ enum Pane: String, CaseIterable, Identifiable {
         case .clipboard: return "Clipboard History"
         case .snippets: return "Text Snippets"
         case .convert: return "File Converter"
+        case .pdfTools: return "PDF Tools"
         case .imageTools: return "Image Tools"
         case .settings: return "Settings"
         }
@@ -23,6 +24,7 @@ enum Pane: String, CaseIterable, Identifiable {
         case .clipboard: return "doc.on.clipboard"
         case .snippets: return "keyboard"
         case .convert: return "arrow.triangle.2.circlepath"
+        case .pdfTools: return "doc.badge.gearshape"
         case .imageTools: return "photo.on.rectangle.angled"
         case .settings: return "gearshape"
         }
@@ -43,6 +45,7 @@ struct MainView: View {
             case .clipboard: ClipboardView()
             case .snippets: SnippetsView()
             case .convert: ConvertView()
+            case .pdfTools: PDFToolsView()
             case .imageTools: ImageToolsView()
             case .settings: SettingsView()
             }

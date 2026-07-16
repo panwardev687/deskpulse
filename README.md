@@ -4,7 +4,7 @@
 
 <h1 align="center">DeskPulse</h1>
 
-<p align="center"><b>Free, open-source clipboard manager, text expander, and file converter for Mac in one native app. Clipboard history with search and pins, snippets that expand as you type, PDF to Word, DOCX to PDF, HEIC to JPG, image resize and compression, audio conversion - with zero network access.</b></p>
+<p align="center"><b>Free, open-source clipboard manager, text expander, and PDF + image toolbox for Mac in one native app. Merge, split, compress, watermark, protect, and OCR PDFs. PDF to Word, HEIC to JPG, resize, compress, crop, and remove image backgrounds. Everything the PDF and image websites do, without uploading your files - zero network access.</b></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-13%2B-blue" alt="macOS 13+">
@@ -15,7 +15,7 @@
 
 ## What is DeskPulse?
 
-DeskPulse is a free alternative to Paste, TextExpander, and Permute. It bundles the desk utilities people usually pay subscriptions for into one native Swift app: a clipboard history manager, a text snippet expander, a document and file converter (PDF, Word, images, audio), and image resize and compression tools. The app is under 2 MB, there is no telemetry, and nothing ever touches the network.
+DeskPulse is a free alternative to Paste, TextExpander, Permute, and the iLovePDF / iLoveIMG web tools. It bundles the desk utilities people usually pay for or upload files to websites for: clipboard history, text snippets, a document and file converter, a full PDF toolbox (merge, split, compress, watermark, protect, OCR), and image tools including background removal. The app is under 3 MB, there is no telemetry, and nothing ever touches the network.
 
 ## Features
 
@@ -24,7 +24,8 @@ DeskPulse is a free alternative to Paste, TextExpander, and Permute. It bundles 
 | **Clipboard History** | Every copy is captured: text, images, and files. Search it, pin favorites so they never expire, click to copy back, or copy as plain text to strip formatting. Anything a password manager marks confidential is never recorded. |
 | **Text Snippets** | Type `;addr` anywhere and it becomes your full address. Triggers expand in every app, with `{date}`, `{time}`, and `{clipboard}` placeholders filled at expansion time. |
 | **File Converter** | Images: HEIC, PNG, JPG, TIFF, WebP, GIF, BMP between each other or to PDF, with quality and resize controls, plus combine several images into one PDF. Audio: MP3 sources to M4A, WAV, AIFF, or FLAC. Documents: DOCX, DOC, RTF, TXT, HTML, ODT, and Markdown between each other or to PDF. PDFs: to Word, RTF, TXT, HTML, or page images. Originals are always kept and existing files are never overwritten. |
-| **Image Tools** | Resize by pixels or percent, compress for email and uploads (JPEG or HEIC, shows how much smaller the result is), rotate and flip. All batch, all local. |
+| **PDF Tools** | Merge PDFs, split by page or range, reorder/rotate/delete pages in a visual editor, compress, watermark, add page numbers, password protect and unlock, and OCR: scanned PDFs and photos to text, Word, or a searchable PDF with an invisible text layer. |
+| **Image Tools** | Resize by pixels or percent, compress for email and uploads (JPEG or HEIC, shows how much smaller the result is), crop with aspect presets, text and logo watermarks, 2x-4x enlargement, remove backgrounds (macOS 14+), rotate and flip. All batch, all local. |
 | **Menu bar popover** | Your last eight clips one click away, next to the clock. DeskPulse keeps working when the window is closed. |
 
 Conversion runs on the `sips`, `afconvert`, and `textutil` tools plus the PDFKit framework that ship inside macOS, so DeskPulse adds no codecs, no bundled ffmpeg or LibreOffice, and no dependencies. One honest limit: document conversion carries text and formatting, not embedded images or exact page layout. For pixel-perfect fidelity on complex documents you still want the original app.
@@ -48,6 +49,19 @@ Conversion runs on the `sips`, `afconvert`, and `textutil` tools plus the PDFKit
 | Telemetry / network calls | None | Yes | Yes | Some | None |
 
 Each of those apps is good at its single job, and the sync features are real advantages if you live on multiple devices. DeskPulse exists because most people need 80% of all three, on one Mac, without three subscriptions.
+
+## DeskPulse vs the PDF and image websites
+
+| | DeskPulse | iLovePDF | iLoveIMG | Smallpdf |
+|---|---|---|---|---|
+| Price | Free | Free tier + $7/mo | Free tier + $7/mo | $12/mo |
+| Files stay on your Mac | Yes | Uploaded to their servers | Uploaded | Uploaded |
+| Works offline | Yes | No | No | No |
+| Account required | Never | For most features | For most features | Yes |
+| File size / task limits | None | On free tier | On free tier | On free tier |
+| Open source | Yes | No | No | No |
+
+The web tools are convenient and cover a few things DeskPulse does not (e-signing, PDF repair, layout-perfect PDF to Word on complex documents, AI upscaling). For everything else, DeskPulse does the same job on your own machine: nothing to upload, no queue, no size limits, and it works on a plane.
 
 ## Install
 
@@ -94,6 +108,18 @@ Drop a DOCX, DOC, RTF, TXT, HTML, ODT, or Markdown file onto the File Converter 
 
 Open DeskPulse's Image Tools pane, choose Compress, and drop your images in. Pick JPEG or HEIC, set the quality, and optionally cap the longest side (2048 px is plenty for email). DeskPulse shows exactly how much smaller each file got, and your originals stay untouched.
 
+### How do I merge PDF files on Mac without uploading them?
+
+Open DeskPulse's PDF Tools pane, choose Merge, drop your PDFs in, drag them into order, and click Merge. The combined PDF is written next to the first file. Unlike the PDF websites, nothing leaves your Mac, there is no file size limit, and it works offline. Split, compress, watermark, and page numbering work the same way.
+
+### How do I extract text from a scanned PDF on Mac?
+
+Use the OCR tool in DeskPulse's PDF Tools pane. Drop in a scanned PDF or a photo of a document and get plain text, a Word file, or a searchable PDF where an invisible text layer is added over the scan. Recognition runs on-device with Apple's Vision engine, so sensitive documents are never uploaded.
+
+### How do I remove the background from an image on Mac for free?
+
+On macOS 14 or newer, open DeskPulse's Image Tools, pick Remove Background, and drop in your photos. Apple's on-device segmentation cuts out the subject (people, pets, products) and writes a PNG with a transparent background. It runs in batch and never sends your photos anywhere.
+
 ### Does DeskPulse record passwords?
 
 No. Password managers mark sensitive copies with a standard "concealed" flag (`org.nspasteboard.ConcealedType`), and DeskPulse skips anything carrying it. History is stored locally in `~/Library/Application Support/DeskPulse`, never synced, never transmitted. You can also delete any item or clear unpinned history at any time.
@@ -120,7 +146,11 @@ DeskPulseApp/           <- the app (start here)
   SnippetsView.swift      snippet editor pane
   ConvertView.swift       file converter (sips / afconvert)
   DocConvert.swift        document + PDF conversion (textutil / PDFKit / CoreText)
-  ImageToolsView.swift    resize, compress, rotate
+  PDFOps.swift            PDF engine: merge, split, compress, protect, OCR
+  PDFToolsView.swift      PDF toolbox pane
+  PDFOrganizeView.swift   page reorder/rotate/delete editor
+  ImageOps.swift          crop, watermark, enlarge, background removal
+  ImageToolsView.swift    image tools pane
   Settings.swift          preferences and launch-at-login
   Shared.swift            common helpers
 build.sh                <- builds DeskPulse.app

@@ -105,7 +105,7 @@ struct SettingsView: View {
             }
 
             Section("About") {
-                LabeledContent("Version", value: "1.1")
+                LabeledContent("Version", value: "1.2")
                 LabeledContent("More free Mac tools") {
                     Button("MacPulse: system monitor and cleaner") {
                         NSWorkspace.shared.open(
