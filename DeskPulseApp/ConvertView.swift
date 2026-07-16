@@ -6,7 +6,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-enum MediaKind { case image, audio, unsupported }
+enum MediaKind { case image, audio, document, pdf, unsupported }
 
 enum JobStatus: Equatable {
     case pending, running, done, failed(String)
@@ -31,6 +31,35 @@ struct ImageFormat: Identifiable, Hashable {
         ImageFormat(name: "png", ext: "png"),
         ImageFormat(name: "heic", ext: "heic"),
         ImageFormat(name: "tiff", ext: "tiff"),
+        ImageFormat(name: "pdf", ext: "pdf"),
+    ]
+}
+
+struct DocFormat: Identifiable, Hashable {
+    let label: String
+    let ext: String      // also the textutil format name, except pdf
+    var id: String { ext }
+    static let all = [
+        DocFormat(label: "Word (DOCX)", ext: "docx"),
+        DocFormat(label: "PDF", ext: "pdf"),
+        DocFormat(label: "RTF", ext: "rtf"),
+        DocFormat(label: "Plain Text", ext: "txt"),
+        DocFormat(label: "HTML", ext: "html"),
+        DocFormat(label: "OpenDocument (ODT)", ext: "odt"),
+    ]
+}
+
+struct PdfTarget: Identifiable, Hashable {
+    let label: String
+    let ext: String
+    var id: String { ext }
+    static let all = [
+        PdfTarget(label: "Word (DOCX)", ext: "docx"),
+        PdfTarget(label: "Plain Text", ext: "txt"),
+        PdfTarget(label: "RTF", ext: "rtf"),
+        PdfTarget(label: "HTML", ext: "html"),
+        PdfTarget(label: "PNG images", ext: "png"),
+        PdfTarget(label: "JPG images", ext: "jpg"),
     ]
 }
 
@@ -54,6 +83,9 @@ private let imageExts: Set<String> = [
 private let audioExts: Set<String> = [
     "mp3", "m4a", "aac", "wav", "aiff", "aif", "caf", "flac", "m4b", "au", "snd",
 ]
+private let docExts: Set<String> = [
+    "doc", "docx", "rtf", "rtfd", "txt", "html", "htm", "odt", "md",
+]
 
 final class ConvertModel: ObservableObject {
     static let shared = ConvertModel()
@@ -66,11 +98,16 @@ final class ConvertModel: ObservableObject {
     @Published var maxDimension = 2048.0     // longest side, px
     @Published var audioFormat = AudioFormat.all[0]
     @Published var bitrate = 192             // kbps for AAC
+    @Published var docFormat = DocFormat.all[0]
+    @Published var pdfTarget = PdfTarget.all[0]
 
     private let queue = DispatchQueue(label: "deskpulse.convert")
 
     var hasImages: Bool { jobs.contains { $0.kind == .image } }
     var hasAudio: Bool { jobs.contains { $0.kind == .audio } }
+    var hasDocs: Bool { jobs.contains { $0.kind == .document } }
+    var hasPDFs: Bool { jobs.contains { $0.kind == .pdf } }
+    var imageURLs: [URL] { jobs.filter { $0.kind == .image }.map(\.url) }
 
     func add(urls: [URL]) {
         for url in urls {
@@ -79,6 +116,8 @@ final class ConvertModel: ObservableObject {
             let kind: MediaKind =
                 imageExts.contains(ext) ? .image
                 : audioExts.contains(ext) ? .audio
+                : docExts.contains(ext) ? .document
+                : ext == "pdf" ? .pdf
                 : .unsupported
             var job = ConvertJob(url: url, kind: kind, inSize: fileSize(url))
             if kind == .unsupported {
@@ -145,8 +184,68 @@ final class ConvertModel: ObservableObject {
             }
             return (.done, out)
 
+        case .document:
+            let out = freeOutputURL(dir: dir, base: base, ext: docFormat.ext)
+            if docFormat.ext == "pdf" {
+                guard let attr = readDocument(job.url) else {
+                    return (.failed("could not read document"), nil)
+                }
+                guard renderPDF(attr, to: out) else {
+                    return (.failed("could not write PDF"), nil)
+                }
+                return (.done, out)
+            }
+            let r = textutilConvert(job.url, to: docFormat.ext, output: out)
+            return r.ok ? (.done, out) : (.failed(r.why), nil)
+
+        case .pdf:
+            if pdfTarget.ext == "png" || pdfTarget.ext == "jpg" {
+                let r = pdfToImages(job.url, format: pdfTarget.ext)
+                return r.out.map { (.done, $0) } ?? (.failed(r.why), nil)
+            }
+            guard let text = pdfText(job.url) else {
+                return (.failed("no text in PDF (scanned image?)"), nil)
+            }
+            let out = freeOutputURL(dir: dir, base: base, ext: pdfTarget.ext)
+            if pdfTarget.ext == "txt" {
+                guard (try? text.write(to: out, atomically: true, encoding: .utf8)) != nil else {
+                    return (.failed("could not write file"), nil)
+                }
+                return (.done, out)
+            }
+            // docx/rtf/html: go through a temp txt file so textutil does the writing
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + ".txt")
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            guard (try? text.write(to: tmp, atomically: true, encoding: .utf8)) != nil else {
+                return (.failed("could not write file"), nil)
+            }
+            let r = textutilConvert(tmp, to: pdfTarget.ext, output: out)
+            return r.ok ? (.done, out) : (.failed(r.why), nil)
+
         case .unsupported:
             return (.failed("unsupported type"), nil)
+        }
+    }
+
+    /// One multi-page PDF from every image in the list, in list order.
+    func combineImagesToPDF() {
+        let urls = imageURLs
+        guard urls.count >= 2, let first = urls.first else { return }
+        let out = freeOutputURL(
+            dir: first.deletingLastPathComponent(),
+            base: first.deletingPathExtension().lastPathComponent + " combined",
+            ext: "pdf")
+        let totalIn = urls.map(fileSize).reduce(0, +)
+        queue.async { [self] in
+            let ok = imagesToPDF(urls, output: out)
+            DispatchQueue.main.async {
+                var job = ConvertJob(url: out, kind: .pdf, inSize: totalIn)
+                job.status = ok ? .done : .failed("could not combine images")
+                job.outURL = ok ? out : nil
+                job.outSize = ok ? fileSize(out) : 0
+                self.jobs.append(job)
+            }
         }
     }
 
@@ -185,9 +284,9 @@ struct ConvertView: View {
             Image(systemName: "arrow.triangle.2.circlepath")
                 .font(.system(size: 40))
                 .foregroundStyle(dropActive ? AnyShapeStyle(.blue) : AnyShapeStyle(.tertiary))
-            Text("Drop images or audio files here")
+            Text("Drop images, audio, documents, or PDFs here")
                 .font(.system(size: 15, weight: .medium))
-            Text("HEIC, JPG, PNG, TIFF, WebP, GIF, BMP · MP3, M4A, WAV, AIFF, FLAC, CAF")
+            Text("HEIC, JPG, PNG, TIFF, WebP · MP3, M4A, WAV, AIFF, FLAC · DOCX, DOC, RTF, TXT, HTML, ODT, MD, PDF")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             Button("Choose Files…") { openPanel() }
         }
@@ -243,6 +342,34 @@ struct ConvertView: View {
                     .padding(4)
                 }
             }
+            if model.hasDocs {
+                GroupBox("Documents") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Convert to", selection: $model.docFormat) {
+                            ForEach(DocFormat.all) { Text($0.label).tag($0) }
+                        }
+                        .frame(maxWidth: 240)
+                        Text("Text and formatting convert; images inside documents do not.")
+                            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    }
+                    .padding(4)
+                }
+            }
+            if model.hasPDFs {
+                GroupBox("PDFs") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Convert to", selection: $model.pdfTarget) {
+                            ForEach(PdfTarget.all) { Text($0.label).tag($0) }
+                        }
+                        .frame(maxWidth: 240)
+                        Text(model.pdfTarget.ext == "png" || model.pdfTarget.ext == "jpg"
+                             ? "Each page becomes an image at 144 dpi."
+                             : "Extracts the text. Layout and images are not carried over.")
+                            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    }
+                    .padding(4)
+                }
+            }
             Spacer()
         }
         .padding(12)
@@ -251,7 +378,7 @@ struct ConvertView: View {
     private var jobList: some View {
         List(model.jobs) { job in
             HStack(spacing: 10) {
-                Image(systemName: job.kind == .image ? "photo" : "waveform")
+                Image(systemName: rowIcon(job.kind))
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(job.url.lastPathComponent).font(.system(size: 12.5))
@@ -264,6 +391,16 @@ struct ConvertView: View {
             .padding(.vertical, 2)
         }
         .listStyle(.inset)
+    }
+
+    private func rowIcon(_ kind: MediaKind) -> String {
+        switch kind {
+        case .image: return "photo"
+        case .audio: return "waveform"
+        case .document: return "doc.text"
+        case .pdf: return "doc.richtext"
+        case .unsupported: return "questionmark.circle"
+        }
     }
 
     private func sizeLine(_ job: ConvertJob) -> String {
@@ -301,6 +438,10 @@ struct ConvertView: View {
         HStack {
             Button("Add Files…") { openPanel() }
             Button("Clear") { model.clear() }.disabled(model.running)
+            if model.imageURLs.count >= 2 {
+                Button("Combine Images into One PDF") { model.combineImagesToPDF() }
+                    .disabled(model.running)
+            }
             Spacer()
             Text("Originals are kept. New files land in the same folder.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)

@@ -4,7 +4,7 @@
 
 <h1 align="center">DeskPulse</h1>
 
-<p align="center"><b>Free, open-source clipboard manager, text expander, and file converter for Mac in one native app. Clipboard history with search and pins, snippets that expand as you type, and HEIC/JPG/PNG and audio conversion - with zero network access.</b></p>
+<p align="center"><b>Free, open-source clipboard manager, text expander, and file converter for Mac in one native app. Clipboard history with search and pins, snippets that expand as you type, PDF to Word, DOCX to PDF, HEIC to JPG, image resize and compression, audio conversion - with zero network access.</b></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-13%2B-blue" alt="macOS 13+">
@@ -15,7 +15,7 @@
 
 ## What is DeskPulse?
 
-DeskPulse is a free alternative to Paste, TextExpander, and Permute. It bundles the three desk utilities people usually pay subscriptions for into one native Swift app: a clipboard history manager, a text snippet expander, and a drag-and-drop image and audio converter. The binary is about 1 MB, there is no telemetry, and nothing ever touches the network.
+DeskPulse is a free alternative to Paste, TextExpander, and Permute. It bundles the desk utilities people usually pay subscriptions for into one native Swift app: a clipboard history manager, a text snippet expander, a document and file converter (PDF, Word, images, audio), and image resize and compression tools. The app is under 2 MB, there is no telemetry, and nothing ever touches the network.
 
 ## Features
 
@@ -23,10 +23,11 @@ DeskPulse is a free alternative to Paste, TextExpander, and Permute. It bundles 
 |---|---|
 | **Clipboard History** | Every copy is captured: text, images, and files. Search it, pin favorites so they never expire, click to copy back, or copy as plain text to strip formatting. Anything a password manager marks confidential is never recorded. |
 | **Text Snippets** | Type `;addr` anywhere and it becomes your full address. Triggers expand in every app, with `{date}`, `{time}`, and `{clipboard}` placeholders filled at expansion time. |
-| **File Converter** | Drag in HEIC, PNG, JPG, TIFF, WebP, GIF, or BMP images and convert between formats with quality and resize controls. Audio converts between MP3 sources and M4A, WAV, AIFF, or FLAC. Originals are always kept and existing files are never overwritten. |
+| **File Converter** | Images: HEIC, PNG, JPG, TIFF, WebP, GIF, BMP between each other or to PDF, with quality and resize controls, plus combine several images into one PDF. Audio: MP3 sources to M4A, WAV, AIFF, or FLAC. Documents: DOCX, DOC, RTF, TXT, HTML, ODT, and Markdown between each other or to PDF. PDFs: to Word, RTF, TXT, HTML, or page images. Originals are always kept and existing files are never overwritten. |
+| **Image Tools** | Resize by pixels or percent, compress for email and uploads (JPEG or HEIC, shows how much smaller the result is), rotate and flip. All batch, all local. |
 | **Menu bar popover** | Your last eight clips one click away, next to the clock. DeskPulse keeps working when the window is closed. |
 
-Conversion runs on the `sips` and `afconvert` tools that ship inside macOS, so DeskPulse adds no codecs, no bundled ffmpeg, and no dependencies.
+Conversion runs on the `sips`, `afconvert`, and `textutil` tools plus the PDFKit framework that ship inside macOS, so DeskPulse adds no codecs, no bundled ffmpeg or LibreOffice, and no dependencies. One honest limit: document conversion carries text and formatting, not embedded images or exact page layout. For pixel-perfect fidelity on complex documents you still want the original app.
 
 ## DeskPulse vs the paid apps
 
@@ -39,6 +40,8 @@ Conversion runs on the `sips` and `afconvert` tools that ship inside macOS, so D
 | Image and file clips | Yes | Yes | No | No | Partial |
 | Text expansion snippets | Yes | No | Yes | No | No |
 | Image conversion (HEIC to JPG) | Yes | No | No | Yes | No |
+| Image resize and compression | Yes | No | No | Yes | No |
+| Document conversion (PDF to Word, DOCX to PDF) | Yes | No | No | No | No |
 | Audio conversion | Yes | No | No | Yes | No |
 | Video conversion | No | No | No | Yes | No |
 | iCloud sync across devices | No | Yes | Yes | No | No |
@@ -79,6 +82,18 @@ Drop HEIC files onto DeskPulse's File Converter pane, pick JPG, choose a quality
 
 macOS has built-in text replacement, but it is unreliable in many apps and hard to manage. DeskPulse's snippets expand in any app: define a trigger like `;sig`, type it anywhere, and the expansion replaces it instantly. Placeholders like `{date}` and `{clipboard}` are filled at the moment of expansion.
 
+### How do I convert a PDF to Word on Mac for free?
+
+Drop the PDF onto DeskPulse's File Converter, pick "Word (DOCX)", and click Convert. DeskPulse extracts the text with Apple's PDF engine and writes a clean DOCX, all locally, so nothing is uploaded to a website. It converts text, not layout: scanned image-only PDFs and heavy visual layouts need a full PDF editor instead.
+
+### How do I convert a Word document to PDF on Mac?
+
+Drop a DOCX, DOC, RTF, TXT, HTML, ODT, or Markdown file onto the File Converter and choose PDF. DeskPulse reads the document with macOS's own text engine and paginates it onto US Letter pages. Text and formatting carry over; images embedded in the document do not. Batch conversion works: drop a whole folder's worth at once.
+
+### How do I compress an image on Mac for email?
+
+Open DeskPulse's Image Tools pane, choose Compress, and drop your images in. Pick JPEG or HEIC, set the quality, and optionally cap the longest side (2048 px is plenty for email). DeskPulse shows exactly how much smaller each file got, and your originals stay untouched.
+
 ### Does DeskPulse record passwords?
 
 No. Password managers mark sensitive copies with a standard "concealed" flag (`org.nspasteboard.ConcealedType`), and DeskPulse skips anything carrying it. History is stored locally in `~/Library/Application Support/DeskPulse`, never synced, never transmitted. You can also delete any item or clear unpinned history at any time.
@@ -104,6 +119,8 @@ DeskPulseApp/           <- the app (start here)
   SnippetsModel.swift     text expansion engine (event tap)
   SnippetsView.swift      snippet editor pane
   ConvertView.swift       file converter (sips / afconvert)
+  DocConvert.swift        document + PDF conversion (textutil / PDFKit / CoreText)
+  ImageToolsView.swift    resize, compress, rotate
   Settings.swift          preferences and launch-at-login
   Shared.swift            common helpers
 build.sh                <- builds DeskPulse.app
